@@ -1,0 +1,101 @@
+- name: Reconstruire srv-lab
+  hosts: localhost
+  connection: local
+  become: true
+
+  tasks:
+    - name: Installer les paquets
+      ansible.builtin.apt:
+        name: [nftables, unattended-upgrades, docker.io, docker-compose, curl]
+        state: present
+        update_cache: true
+
+    - name: Durcir SSH
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/10-durcissement.conf
+        content: |
+          PermitRootLogin no
+          PasswordAuthentication no
+        mode: "0644"
+        validate: /usr/sbin/sshd -t -f %s
+      notify: Recharger ssh
+
+    - name: Pare-feu nftables
+      ansible.builtin.copy:
+        dest: /etc/nftables.conf
+        mode: "0644"
+        content: |
+          #!/usr/sbin/nft -f
+          flush ruleset
+          table inet filter {
+            chain input {
+              type filter hook input priority 0; policy drop;
+              ct state established,related accept
+              iif "lo" accept
+              meta l4proto { icmp, ipv6-icmp } accept
+              tcp dport { 22, 80, 443 } accept
+            }
+          }
+      notify: Recharger nftables
+
+    - name: nftables actif au démarrage
+      ansible.builtin.systemd_service:
+        name: nftables
+        enabled: true
+        state: started
+
+    - name: Docker actif au démarrage
+      ansible.builtin.systemd_service:
+        name: docker
+        enabled: true
+        state: started
+    
+    - name: alice dans le groupe docker
+      ansible.builtin.user:
+        name: alice
+        groups: docker
+        append: true   
+
+    - name: Dossier de la plateforme
+      ansible.builtin.file:
+        path: /srv/plateforme/data
+        state: directory
+        mode: "0755"
+
+    - name: Copier compose.yaml
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/compose.yaml"
+        dest: /srv/plateforme/compose.yaml
+        mode: "0644"
+
+    - name: Copier le Caddyfile du lab
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/Caddyfile.lab"
+        dest: /srv/plateforme/Caddyfile
+        mode: "0644"
+
+    - name: Appliquer les handlers avant la pile
+      ansible.builtin.meta: flush_handlers
+
+    - name: Démarrer la pile
+      community.docker.docker_compose_v2:
+        project_src: /srv/plateforme
+        state: present
+
+  handlers:
+    - name: Recharger ssh
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: reloaded
+
+    - name: Recharger nftables
+      ansible.builtin.systemd_service:
+        name: nftables
+        state: restarted
+      notify: Redémarrer docker
+
+    - name: Redémarrer docker
+      ansible.builtin.systemd_service:
+        name: docker
+        state: restarted
+
