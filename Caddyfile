@@ -1,0 +1,7 @@
+status.ydinar.fr {
+    reverse_proxy kuma:3001
+}
+
+notif.ydinar.fr {
+    reverse_proxy ntfy:80
+}
